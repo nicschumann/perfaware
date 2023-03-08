@@ -3,10 +3,11 @@ from dataclasses import dataclass
 
 PRINT_DECODE = True
 
+# Opcodes
 mov_rm_to_from_r_header = 0b100010
 mov_imm_to_reg_mem = 0b1100011
 mov_imm_to_reg = 0b1011
-
+mov_acc_to_from_mem = 0b101000
 
 @dataclass
 class Immediate:
@@ -177,8 +178,25 @@ def instruction_decode(instruction : int, instr_stream) -> MovInstruction:
                 print(f' reg: {reg:8b}')
 
         return MovInstruction(dest, Immediate(w * 2, data))
-        
     
+    # Accumulator to/from Memory
+    if (instruction >> 2) == mov_acc_to_from_mem:        
+        w = instruction & 1 # should always be 1
+        d = (instruction & 2) >> 1
+
+        if PRINT_DECODE:
+            print(f'inst: {instruction:8b}' )
+            print(f'   d: {d:7b}')
+            print(f'   w: {w:8b}')
+
+        addr = decode_bytes(w, instr_stream)
+
+        if d:
+            return MovInstruction(DirectAddress(Immediate(2, addr)), Register('AX'))
+        else:
+            return MovInstruction(Register('AX'), DirectAddress(Immediate(2, addr)))
+    
+
     if (instruction >> 2) == mov_rm_to_from_r_header:
 
         instr_uint8 = decode_bytes(0, instr_stream)
@@ -207,50 +225,49 @@ def instruction_decode(instruction : int, instr_stream) -> MovInstruction:
             reg_index = ((dw & 1) << 3) + reg
             rem_index = ((dw & 1) << 3) + rem
             reg_is_dst = (dw & 2) == 2
+
             dst = REGISTER_TABLE[reg_index if reg_is_dst else rem_index]
             src = REGISTER_TABLE[rem_index if reg_is_dst else reg_index]
 
             return MovInstruction(dst, src)
         
-        elif mod == 2:
-            # register <-> memory [expr + 16 bit displacement]
+        elif mod == 2: # register <-> memory [expr + 16 bit displacement]
 
             d16 = decode_bytes(1, instr_stream)
 
             reg_index = ((dw & 1) << 3) + reg
             ea_index = (mod*8) + rem
+            reg_is_dst = (dw & 2) == 2
 
             reg_val = REGISTER_TABLE[reg_index]
             ea_val = EFFECTIVE_ADDRESS_TABLE[ea_index]
             ea_val.offset.value = d16
 
-            reg_is_dst = (dw & 2) == 2
             dst = reg_val if reg_is_dst else ea_val
             src = ea_val if reg_is_dst else reg_val
 
             return MovInstruction(dst, src)
 
 
-        elif mod == 1:
-            # register <-> memory [expr + 8 bit displacement]
-            # expr + 8bit displacement
+        elif mod == 1: # register <-> memory [expr + 8 bit displacement]
+
             d8 = decode_bytes(0, instr_stream)
 
             reg_index = ((dw & 1) << 3) + reg
             ea_index = (mod*8) + rem
+            reg_is_dst = (dw & 2) == 2
             reg_val = REGISTER_TABLE[reg_index]
             ea_val = EFFECTIVE_ADDRESS_TABLE[ea_index]
+
             ea_val.offset.value = d8
 
-            reg_is_dst = (dw & 2) == 2
             dst = reg_val if reg_is_dst else ea_val
             src = ea_val if reg_is_dst else reg_val
 
             return MovInstruction(dst, src)
 
-        elif mod == 0:
-            # register <-> memory [expr]
-            # expr, no displacement
+        elif mod == 0: # register <-> memory [expr] no displacement, unless r/m = 0b110, then direct address.
+
             reg_index = ((dw & 1) << 3) + reg
             ea_index = (mod*8) + rem
             reg_is_dst = (dw & 2) == 2
@@ -261,8 +278,8 @@ def instruction_decode(instruction : int, instr_stream) -> MovInstruction:
             src = ea_val if reg_is_dst else reg_val
             
             if rem == 0b110:
-                disp = decode_bytes(1, instr_stream)
-                ea_val.offset.value = disp
+                d16 = decode_bytes(1, instr_stream)
+                ea_val.offset.value = d16
 
             return MovInstruction(dst, src)
 

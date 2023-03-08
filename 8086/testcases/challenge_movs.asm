@@ -28,17 +28,17 @@ mov [di + 901], word 347
 ; NOTE(Nic): added
 mov [2555], word 3
 
-; ; Direct address
+; Direct address
 mov bp, [5]
 mov bx, [3458]
 
 ; NOTE(Nic): added
 mov [2555], bx
 
-; ; Memory-to-accumulator test
-; mov ax, [2555]
-; mov ax, [16]
+; Memory-to-accumulator test
+mov ax, [2555]
+mov ax, [16]
 
-; ; Accumulator-to-memory test
-; mov [2554], ax
-; mov [15], ax
+; Accumulator-to-memory test
+mov [2554], ax
+mov [15], ax
