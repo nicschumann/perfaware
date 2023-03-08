@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 
 
-PRINT_DECODE = True
+PRINT_DECODE = False
 
 # Opcodes
 mov_rm_to_from_r_header = 0b100010
@@ -15,7 +15,7 @@ class Immediate:
     value: int | None = None
 
     def __repr__(self) -> str:
-        return f'{self.value}'
+        return f'{abs(self.value)}'
 
 @dataclass
 class Register:
@@ -38,7 +38,8 @@ class EffectiveAddress:
     offset: Immediate | None
 
     def __repr__(self) -> str:
-        offset_string = '' if self.offset is None or self.offset.value == 0 else f' + {self.offset}'
+        sign = '-' if self.offset is not None and self.offset.value < 0 else '+'
+        offset_string = '' if self.offset is None or self.offset.value == 0 else f' {sign} {self.offset}'
         return f'[{self.register}' + offset_string + ']'
 
 @dataclass
@@ -114,15 +115,28 @@ EFFECTIVE_ADDRESS_TABLE = [
     EffectiveAddress(Register('BX'), Immediate(2)), # [BX + WORD 16]
 ]
 
-def decode_bytes(wide: int, instr_stream) -> int:
-    data_bytes = instr_stream.read(1)
-    data = int.from_bytes(data_bytes, byteorder="big")
-
-    if wide == 1:
-        data_h_bytes = instr_stream.read(1)
-        data_h = int.from_bytes(data_h_bytes, byteorder="big")
-        data = (data_h << 8) + data
+def decode_bytes(wide: int, instr_stream, sign_extend=False) -> int:
+    data_bytes = bytearray(instr_stream.read(1))
     
+    if wide == 1:
+        data_h_bytes = bytearray(instr_stream.read(1))
+        data_h_bytes.extend(data_bytes)
+        data_bytes = data_h_bytes
+
+    if sign_extend:
+        high_bit_set = data_bytes[0] > 127
+        extension = bytearray(b'\xFF' if high_bit_set else b'\x00')
+        # sign extension... out to 16 and 24 bits. Python doesn't
+        # allow me to make a 19 bit number, which is technically what 
+        # the 8086 manual says I should sign-extend a 16-bit number to,
+        # but extending to 24-bit = 3-byte using the same logic should
+        # create equivalent results, per the definition of 2s-complement.
+        extension.extend(data_bytes) 
+        data_bytes = extension
+        
+
+    data = int.from_bytes(data_bytes, byteorder='big', signed=sign_extend)    
+
     return data
 
 
@@ -141,10 +155,10 @@ def instruction_decode(instruction : int, instr_stream) -> MovInstruction:
         disp = 0
 
         if mod == 1:
-            disp = decode_bytes(0, instr_stream)
+            disp = decode_bytes(0, instr_stream, sign_extend=True)
         
         elif mod == 2 or rem == 0b110:
-            disp = decode_bytes(1, instr_stream)
+            disp = decode_bytes(1, instr_stream, sign_extend=True)
 
         data = decode_bytes(w, instr_stream)
 
@@ -233,7 +247,7 @@ def instruction_decode(instruction : int, instr_stream) -> MovInstruction:
         
         elif mod == 2: # register <-> memory [expr + 16 bit displacement]
 
-            d16 = decode_bytes(1, instr_stream)
+            d16 = decode_bytes(1, instr_stream, sign_extend=True)
 
             reg_index = ((dw & 1) << 3) + reg
             ea_index = (mod*8) + rem
@@ -251,7 +265,7 @@ def instruction_decode(instruction : int, instr_stream) -> MovInstruction:
 
         elif mod == 1: # register <-> memory [expr + 8 bit displacement]
 
-            d8 = decode_bytes(0, instr_stream)
+            d8 = decode_bytes(0, instr_stream, sign_extend=True)
 
             reg_index = ((dw & 1) << 3) + reg
             ea_index = (mod*8) + rem

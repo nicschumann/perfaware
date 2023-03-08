@@ -17,9 +17,9 @@
 bits 16
 
 ; Signed displacements
-; mov ax, [bx + di - 37]
-; mov [si - 300], cx
-; mov dx, [bx - 32]
+mov ax, [bx + di - 37]
+mov [si - 300], cx
+mov dx, [bx - 32]
 
 ; Explicit sizes
 mov [bp + di], byte 7
