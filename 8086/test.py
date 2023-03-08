@@ -6,7 +6,10 @@ if __name__ == '__main__':
     testcases = [
         './testcases/single_register_mov',
         './testcases/many_register_mov',
+        './testcases/more_movs'
     ]
+
+    print(f'Running {len(testcases)} test(s).\n')
 
     for testcase in testcases:
         binary = open(testcase, 'rb')
@@ -27,9 +30,9 @@ if __name__ == '__main__':
 
         binary_contents = binary.read()
         binary_prime_contents = binary_prime.read()
+        passed = binary_contents == binary_prime_contents
 
-        
-        print(binary_contents == binary_prime_contents)
+        print(f'{passed} \t\t ({testcase})')
 
         # Cleanup
         binary_prime.close()
