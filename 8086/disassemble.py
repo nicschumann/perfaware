@@ -1,9 +1,10 @@
 from dataclasses import dataclass
 
 
-PRINT_DECODE = False
+PRINT_DECODE = True
 
 mov_rm_to_from_r_header = 0b100010
+mov_imm_to_reg_mem = 0b1100011
 mov_imm_to_reg = 0b1011
 
 
@@ -40,12 +41,24 @@ class EffectiveAddress:
         return f'[{self.register}' + offset_string + ']'
 
 @dataclass
+class DirectAddress:
+    offset: Immediate
+
+    def __repr__(self) -> str:
+        return f'[{self.offset}]'
+
+@dataclass
 class MovInstruction:
     dest: Register | EffectiveAddress
     source: Register | EffectiveAddress | Immediate
 
     def __repr__(self) -> str:
-        return f'mov {self.dest}, {self.source}'
+        length_flag = ''
+
+        if (type(self.dest) == EffectiveAddress or type(self.dest) == DirectAddress) and type(self.source) == Immediate:
+            length_flag = 'word ' if self.source.bytelength == 2 else 'byte '
+
+        return f'mov {self.dest}, {length_flag}{self.source}'
 
 
 REGISTER_TABLE = [
@@ -76,7 +89,7 @@ EFFECTIVE_ADDRESS_TABLE = [
 
     EffectiveAddress(Register('SI'), None), # [SI]
     EffectiveAddress(Register('DI'), None), # [DI]
-    EffectiveAddress(None, Immediate(2)),   # [WORD 16]
+    DirectAddress(Immediate(2)), # [WORD 16]
     EffectiveAddress(Register('BX'), None), # [BX]
 
     EffectiveAddress(RegisterSum(Register('BX'), Register('SI')), Immediate(1)), # [BX + SI + BYTE 8]
@@ -100,25 +113,62 @@ EFFECTIVE_ADDRESS_TABLE = [
     EffectiveAddress(Register('BX'), Immediate(2)), # [BX + WORD 16]
 ]
 
+def decode_bytes(wide: int, instr_stream) -> int:
+    data_bytes = instr_stream.read(1)
+    data = int.from_bytes(data_bytes, byteorder="big")
+
+    if wide == 1:
+        data_h_bytes = instr_stream.read(1)
+        data_h = int.from_bytes(data_h_bytes, byteorder="big")
+        data = (data_h << 8) + data
+    
+    return data
+
 
 def instruction_decode(instruction : int, instr_stream) -> MovInstruction:  
     
     if PRINT_DECODE:
         print(f'\nhead: {instruction:8b}' )
 
+    if (instruction >> 1) == mov_imm_to_reg_mem: 
+        instr_bytes = instr_stream.read(1)
+        instr_addl = int.from_bytes(instr_bytes, byteorder="big")
+
+        w = (instruction & 1)
+        mod = instr_addl >> 6
+        rem = instr_addl & 0b00000111
+        disp = 0
+
+        if mod == 1:
+            disp = decode_bytes(0, instr_stream)
+        
+        elif mod == 2 or rem == 0b110:
+            disp = decode_bytes(1, instr_stream)
+
+        data = decode_bytes(w, instr_stream)
+
+        ea_index = (mod*8) + rem
+
+        dst = EFFECTIVE_ADDRESS_TABLE[ea_index]
+        if dst.offset is not None: dst.offset.value = disp
+
+        src = Immediate(w * 2, data)
+
+        if PRINT_DECODE:
+            print(f'inst: {(instruction << 8) + instr_addl:16b}' )
+            print(f'   w: {w:8b}')
+            print(f' mod: {mod:10b}')
+            print(f' rem: {rem:16b}')
+
+        return MovInstruction(dst, src)
+
+
     if (instruction >> 4) == mov_imm_to_reg:
         w = (instruction & 0b00001000) >> 3
-        reg = (instruction & 0b00000111)
+        reg = instruction & 0b00000111
         reg_index = (w << 3) + reg
 
-        data_bytes = instr_stream.read(1)
-        data = int.from_bytes(data_bytes, byteorder="big")
-
-        if w == 1:
-            data_h_bytes = instr_stream.read(1)
-            data_h = int.from_bytes(data_h_bytes, byteorder="big")
-            data = (data_h << 8) + data
-
+        data = decode_bytes(w, instr_stream)
         dest = REGISTER_TABLE[reg_index]
 
         if PRINT_DECODE:
@@ -131,10 +181,8 @@ def instruction_decode(instruction : int, instr_stream) -> MovInstruction:
     
     if (instruction >> 2) == mov_rm_to_from_r_header:
 
-        instr_bytes = instr_stream.read(1) 
-        instr_uint8 = int.from_bytes(instr_bytes, byteorder="big")
+        instr_uint8 = decode_bytes(0, instr_stream)
         instruction = (instruction << 8) + instr_uint8
-
 
         instr_data = (instruction & (2**10 - 1))
         dw = instr_data >> 8
@@ -167,16 +215,11 @@ def instruction_decode(instruction : int, instr_stream) -> MovInstruction:
         elif mod == 2:
             # register <-> memory [expr + 16 bit displacement]
 
-            d8l_bytes = instr_stream.read(1)
-            d8l = int.from_bytes(d8l_bytes, byteorder="big")
-
-            d8h_bytes = instr_stream.read(1)
-            d8h = int.from_bytes(d8h_bytes, byteorder="big")
-
-            d16 = (d8h << 8) + d8l
+            d16 = decode_bytes(1, instr_stream)
 
             reg_index = ((dw & 1) << 3) + reg
             ea_index = (mod*8) + rem
+
             reg_val = REGISTER_TABLE[reg_index]
             ea_val = EFFECTIVE_ADDRESS_TABLE[ea_index]
             ea_val.offset.value = d16
@@ -191,9 +234,7 @@ def instruction_decode(instruction : int, instr_stream) -> MovInstruction:
         elif mod == 1:
             # register <-> memory [expr + 8 bit displacement]
             # expr + 8bit displacement
-
-            d8_bytes = instr_stream.read(1)
-            d8 = int.from_bytes(d8_bytes, byteorder="big")
+            d8 = decode_bytes(0, instr_stream)
 
             reg_index = ((dw & 1) << 3) + reg
             ea_index = (mod*8) + rem
@@ -213,8 +254,15 @@ def instruction_decode(instruction : int, instr_stream) -> MovInstruction:
             reg_index = ((dw & 1) << 3) + reg
             ea_index = (mod*8) + rem
             reg_is_dst = (dw & 2) == 2
-            dst = REGISTER_TABLE[reg_index] if reg_is_dst else EFFECTIVE_ADDRESS_TABLE[ea_index]
-            src = EFFECTIVE_ADDRESS_TABLE[ea_index] if reg_is_dst else REGISTER_TABLE[reg_index]
+            reg_val = REGISTER_TABLE[reg_index]
+            ea_val = EFFECTIVE_ADDRESS_TABLE[ea_index]
+
+            dst = reg_val if reg_is_dst else ea_val
+            src = ea_val if reg_is_dst else reg_val
+            
+            if rem == 0b110:
+                disp = decode_bytes(1, instr_stream)
+                ea_val.offset.value = disp
 
             return MovInstruction(dst, src)
 
@@ -234,7 +282,7 @@ def disassemble(file):
         
 
 if __name__ == '__main__':
-    filepath = './testcases/more_movs'
+    filepath = './testcases/challenge_movs'
     file = open(filepath, 'rb')
     file.seek(0)
 
