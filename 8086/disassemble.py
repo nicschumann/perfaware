@@ -4,10 +4,11 @@ from dataclasses import dataclass
 PRINT_DECODE = False
 
 # Opcodes
-mov_rm_to_from_r_header = 0b100010
+mov_rm_to_from_r_header = 0b10001
 mov_imm_to_reg_mem = 0b1100011
 mov_imm_to_reg = 0b1011
 mov_acc_to_from_mem = 0b101000
+
 
 @dataclass
 class Immediate:
@@ -64,6 +65,7 @@ class MovInstruction:
 
 
 REGISTER_TABLE = [
+    # Regular Registers
     Register('AL'),
     Register('CL'),
     Register('DL'),
@@ -80,6 +82,12 @@ REGISTER_TABLE = [
     Register('BP'),
     Register('SI'),
     Register('DI'),
+
+    # Segment Registers
+    Register('ES'),
+    Register('CS'),
+    Register('SS'),
+    Register('DS'),
 ]
 
 EFFECTIVE_ADDRESS_TABLE = [
@@ -145,9 +153,9 @@ def instruction_decode(instruction : int, instr_stream) -> MovInstruction:
     if PRINT_DECODE:
         print(f'\nhead: {instruction:8b}' )
 
+    # Mov: Immediate to Register/Memory
     if (instruction >> 1) == mov_imm_to_reg_mem: 
-        instr_bytes = instr_stream.read(1)
-        instr_addl = int.from_bytes(instr_bytes, byteorder="big")
+        instr_addl = decode_bytes(0, instr_stream)
 
         w = (instruction & 1)
         mod = instr_addl >> 6
@@ -177,7 +185,7 @@ def instruction_decode(instruction : int, instr_stream) -> MovInstruction:
 
         return MovInstruction(dst, src)
 
-
+    # Mov: Immediate to register
     if (instruction >> 4) == mov_imm_to_reg:
         w = (instruction & 0b00001000) >> 3
         reg = instruction & 0b00000111
@@ -193,7 +201,7 @@ def instruction_decode(instruction : int, instr_stream) -> MovInstruction:
 
         return MovInstruction(dest, Immediate(w * 2, data))
     
-    # Accumulator to/from Memory
+    # Mov: Accumulator to/from Memory
     if (instruction >> 2) == mov_acc_to_from_mem:        
         w = instruction & 1 # should always be 1
         d = (instruction & 2) >> 1
@@ -210,15 +218,18 @@ def instruction_decode(instruction : int, instr_stream) -> MovInstruction:
         else:
             return MovInstruction(Register('AX'), DirectAddress(Immediate(2, addr)))
     
+    # Mov: Register/Memory to/from Register
+    # Mov: Segment Register to/from memory
+    if (instruction >> 3) == mov_rm_to_from_r_header:
 
-    if (instruction >> 2) == mov_rm_to_from_r_header:
+        s = (instruction & 4) >> 2
+        d = (instruction & 2) >> 1
+        w = (instruction & 1) | s # all segment registers are wide.
 
         instr_uint8 = decode_bytes(0, instr_stream)
         instruction = (instruction << 8) + instr_uint8
 
         instr_data = (instruction & (2**10 - 1))
-        dw = instr_data >> 8
-
         instr_data = (instr_data & (2**8 - 1))
         mod = instr_data >> 6
 
@@ -230,15 +241,18 @@ def instruction_decode(instruction : int, instr_stream) -> MovInstruction:
 
         if PRINT_DECODE:
             print(f'inst: {instruction:16b}' )
-            print(f'  dw: {dw:8b}')
+            print(f'   s: {s:6b}')
+            print(f'   d: {d:7b}')
+            print(f'   w: {w:8b}')
             print(f' mod: {mod:10b}')
             print(f' reg: {reg:13b}')
             print(f' rem: {rem:16b}')
 
         if mod == 3: # MOD = 0b11 = 3, register -> register
-            reg_index = ((dw & 1) << 3) + reg
-            rem_index = ((dw & 1) << 3) + rem
-            reg_is_dst = (dw & 2) == 2
+            reg_index = (w << (3 + s)) + reg
+            rem_index = (w << 3) + rem
+
+            reg_is_dst = d == 1
 
             dst = REGISTER_TABLE[reg_index if reg_is_dst else rem_index]
             src = REGISTER_TABLE[rem_index if reg_is_dst else reg_index]
@@ -249,9 +263,9 @@ def instruction_decode(instruction : int, instr_stream) -> MovInstruction:
 
             d16 = decode_bytes(1, instr_stream, sign_extend=True)
 
-            reg_index = ((dw & 1) << 3) + reg
-            ea_index = (mod*8) + rem
-            reg_is_dst = (dw & 2) == 2
+            reg_index = (w << (3 + s)) + reg
+            ea_index = (mod * 8) + rem
+            reg_is_dst = d == 1
 
             reg_val = REGISTER_TABLE[reg_index]
             ea_val = EFFECTIVE_ADDRESS_TABLE[ea_index]
@@ -267,9 +281,9 @@ def instruction_decode(instruction : int, instr_stream) -> MovInstruction:
 
             d8 = decode_bytes(0, instr_stream, sign_extend=True)
 
-            reg_index = ((dw & 1) << 3) + reg
+            reg_index = (w << (3 + s)) + reg
             ea_index = (mod*8) + rem
-            reg_is_dst = (dw & 2) == 2
+            reg_is_dst = d == 1
             reg_val = REGISTER_TABLE[reg_index]
             ea_val = EFFECTIVE_ADDRESS_TABLE[ea_index]
 
@@ -282,9 +296,9 @@ def instruction_decode(instruction : int, instr_stream) -> MovInstruction:
 
         elif mod == 0: # register <-> memory [expr] no displacement, unless r/m = 0b110, then direct address.
 
-            reg_index = ((dw & 1) << 3) + reg
+            reg_index = (w << (3 + s)) + reg
             ea_index = (mod*8) + rem
-            reg_is_dst = (dw & 2) == 2
+            reg_is_dst = d == 1
             reg_val = REGISTER_TABLE[reg_index]
             ea_val = EFFECTIVE_ADDRESS_TABLE[ea_index]
 
@@ -313,7 +327,7 @@ def disassemble(file):
         
 
 if __name__ == '__main__':
-    filepath = './testcases/challenge_movs'
+    filepath = './testcases/single_register_mov'
     file = open(filepath, 'rb')
     file.seek(0)
 

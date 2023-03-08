@@ -3,3 +3,4 @@ testcase:
 	nasm testcases/many_register_mov.asm
 	nasm testcases/more_movs.asm
 	nasm testcases/challenge_movs.asm
+	nasm testcases/mov_segment_registers.asm

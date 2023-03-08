@@ -7,7 +7,8 @@ if __name__ == '__main__':
         './testcases/single_register_mov',
         './testcases/many_register_mov',
         './testcases/more_movs',
-        './testcases/challenge_movs'
+        './testcases/challenge_movs',
+        './testcases/mov_segment_registers'
     ]
 
     print(f'Running {len(testcases)} test(s).\n')
